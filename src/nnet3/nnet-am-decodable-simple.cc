@@ -32,7 +32,8 @@ DecodableNnetSimple::DecodableNnetSimple(
     CachingOptimizingCompiler *compiler,
     const VectorBase<BaseFloat> *ivector,
     const MatrixBase<BaseFloat> *online_ivectors,
-    int32 online_ivector_period):
+    int32 online_ivector_period,
+    const VectorBase<BaseFloat> *accent_vec):
     opts_(opts),
     nnet_(nnet),
     output_dim_(nnet_.OutputDim("output")),
@@ -40,6 +41,7 @@ DecodableNnetSimple::DecodableNnetSimple(
     feats_(feats),
     ivector_(ivector), online_ivector_feats_(online_ivectors),
     online_ivector_period_(online_ivector_period),
+    accent_vec_(accent_vec),
     compiler_(*compiler),
     current_log_post_subsampled_offset_(0) {
   num_subsampled_frames_ =
@@ -90,13 +92,22 @@ int32 DecodableNnetSimple::GetIvectorDim() const {
     return 0;
 }
 
+int32 DecodableNnetSimple::GetAccentVecDim() const {
+  if (accent_vec_ != NULL)
+    return accent_vec_->Dim();
+  else
+    return 0;
+}
+
 void DecodableNnetSimple::EnsureFrameIsComputed(int32 subsampled_frame) {
   KALDI_ASSERT(subsampled_frame >= 0 &&
                subsampled_frame < num_subsampled_frames_);
   int32 feature_dim = feats_.NumCols(),
       ivector_dim = GetIvectorDim(),
+      accent_vec_dim = GetAccentVecDim(),
       nnet_input_dim = nnet_.InputDim("input"),
-      nnet_ivector_dim = std::max<int32>(0, nnet_.InputDim("ivector"));
+      nnet_ivector_dim = std::max<int32>(0, nnet_.InputDim("ivector")),
+      nnet_accent_vec_dim = std::max<int32>(0, nnet_.InputDim("accent"));
   if (feature_dim != nnet_input_dim)
     KALDI_ERR << "Neural net expects 'input' features with dimension "
               << nnet_input_dim << " but you provided "
@@ -104,6 +115,9 @@ void DecodableNnetSimple::EnsureFrameIsComputed(int32 subsampled_frame) {
   if (ivector_dim != std::max<int32>(0, nnet_.InputDim("ivector")))
     KALDI_ERR << "Neural net expects 'ivector' features with dimension "
               << nnet_ivector_dim << " but you provided " << ivector_dim;
+  if (accent_vec_dim != std::max<int32>(0, nnet_.InputDim("accent")))
+    KALDI_ERR << "Neural net expects 'accent' features with dimension "
+              << nnet_accent_vec_dim << " but you provided " << accent_vec_dim;
 
   int32 current_subsampled_frames_computed = current_log_post_.NumRows(),
       current_subsampled_offset = current_log_post_subsampled_offset_;
@@ -143,12 +157,15 @@ void DecodableNnetSimple::EnsureFrameIsComputed(int32 subsampled_frame) {
                     last_output_frame - first_output_frame,
                     &ivector);
 
+  Vector<BaseFloat> accent_vec;
+  GetCurrentAccentVec(&accent_vec);
+
   Matrix<BaseFloat> input_feats;
   if (first_input_frame >= 0 &&
       last_input_frame < feats_.NumRows()) {
     SubMatrix<BaseFloat> input_feats(feats_.RowRange(first_input_frame,
                                                      num_input_frames));
-    DoNnetComputation(first_input_frame, input_feats, ivector,
+    DoNnetComputation(first_input_frame, input_feats, ivector, accent_vec,
                       first_output_frame, num_subsampled_frames);
   } else {
     Matrix<BaseFloat> feats_block(num_input_frames, feats_.NumCols());
@@ -161,7 +178,7 @@ void DecodableNnetSimple::EnsureFrameIsComputed(int32 subsampled_frame) {
       const SubVector<BaseFloat> src(feats_, t);
       dest.CopyFromVec(src);
     }
-    DoNnetComputation(first_input_frame, feats_block, ivector,
+    DoNnetComputation(first_input_frame, feats_block, ivector, accent_vec,
                       first_output_frame, num_subsampled_frames);
   }
 }
@@ -212,10 +229,19 @@ void DecodableNnetSimple::GetCurrentIvector(int32 output_t_start,
 }
 
 
+void DecodableNnetSimple::GetCurrentAccentVec(Vector<BaseFloat> *accent_vec) {
+  if (accent_vec_ != NULL) {
+    *accent_vec = *accent_vec_;
+    return;
+  }
+}
+
+
 void DecodableNnetSimple::DoNnetComputation(
     int32 input_t_start,
     const MatrixBase<BaseFloat> &input_feats,
     const VectorBase<BaseFloat> &ivector,
+    const VectorBase<BaseFloat> &accent_vec,
     int32 output_t_start,
     int32 num_subsampled_frames) {
   ComputationRequest request;
@@ -228,7 +254,7 @@ void DecodableNnetSimple::DoNnetComputation(
   int32 time_offset = (shift_time ? -output_t_start : 0);
 
   // First add the regular features-- named "input".
-  request.inputs.reserve(2);
+  request.inputs.reserve(3);
   request.inputs.push_back(
       IoSpecification("input", time_offset + input_t_start,
                       time_offset + input_t_start + input_feats.NumRows()));
@@ -236,6 +262,11 @@ void DecodableNnetSimple::DoNnetComputation(
     std::vector<Index> indexes;
     indexes.push_back(Index(0, 0, 0));
     request.inputs.push_back(IoSpecification("ivector", indexes));
+  }
+  if (accent_vec.Dim() != 0) {
+    std::vector<Index> indexes;
+    indexes.push_back(Index(0, 0, 0));
+    request.inputs.push_back(IoSpecification("accent", indexes));
   }
   IoSpecification output_spec;
   output_spec.name = "output";
@@ -260,6 +291,12 @@ void DecodableNnetSimple::DoNnetComputation(
     ivector_feats_cu.Resize(1, ivector.Dim());
     ivector_feats_cu.Row(0).CopyFromVec(ivector);
     computer.AcceptInput("ivector", &ivector_feats_cu);
+  }
+  CuMatrix<BaseFloat> accent_feats_cu;
+  if (accent_vec.Dim() > 0) {
+    accent_feats_cu.Resize(1, accent_vec.Dim());
+    accent_feats_cu.Row(0).CopyFromVec(accent_vec);
+    computer.AcceptInput("accent", &accent_feats_cu);
   }
   computer.Run();
   CuMatrix<BaseFloat> cu_output;
@@ -317,12 +354,14 @@ DecodableAmNnetSimpleParallel::DecodableAmNnetSimpleParallel(
     const MatrixBase<BaseFloat> &feats,
     const VectorBase<BaseFloat> *ivector,
     const MatrixBase<BaseFloat> *online_ivectors,
-    int32 online_ivector_period):
+    int32 online_ivector_period,
+    const VectorBase<BaseFloat> *accent_vec):
     compiler_(am_nnet.GetNnet(), opts.optimize_config, opts.compiler_config),
     trans_model_(trans_model),
     feats_copy_(NULL),
     ivector_copy_(NULL),
     online_ivectors_copy_(NULL),
+    accent_vec_copy_(NULL),
     decodable_nnet_(NULL) {
   try {
     feats_copy_ = new Matrix<BaseFloat>(feats);
@@ -330,11 +369,14 @@ DecodableAmNnetSimpleParallel::DecodableAmNnetSimpleParallel(
       ivector_copy_ = new Vector<BaseFloat>(*ivector);
     if (online_ivectors != NULL)
       online_ivectors_copy_ = new Matrix<BaseFloat>(*online_ivectors);
+    if (accent_vec != NULL)
+      accent_vec_copy_ = new Vector<BaseFloat>(*accent_vec);
     decodable_nnet_ = new DecodableNnetSimple(opts, am_nnet.GetNnet(),
                                               am_nnet.Priors(), *feats_copy_,
                                               &compiler_, ivector_copy_,
                                               online_ivectors_copy_,
-                                              online_ivector_period);
+                                              online_ivector_period,
+                                              accent_vec_copy_);
 
   } catch (...) {
     DeletePointers();
@@ -352,6 +394,8 @@ void DecodableAmNnetSimpleParallel::DeletePointers() {
   ivector_copy_ = NULL;
   delete online_ivectors_copy_;
   online_ivectors_copy_ = NULL;
+  delete accent_vec_copy_;
+  accent_vec_copy_ = NULL;
 }
 
 

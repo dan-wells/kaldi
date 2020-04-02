@@ -61,7 +61,8 @@ int main(int argc, char *argv[]) {
     std::string word_syms_filename;
     std::string ivector_rspecifier,
         online_ivector_rspecifier,
-        utt2spk_rspecifier;
+        utt2spk_rspecifier,
+        accent_vec_rspecifier;
     int32 online_ivector_period = 0;
     sequencer_config.Register(&po);
     config.Register(&po);
@@ -79,6 +80,8 @@ int main(int argc, char *argv[]) {
     po.Register("online-ivector-period", &online_ivector_period, "Number of frames "
                 "between iVectors in matrices supplied to the --online-ivectors "
                 "option");
+    po.Register("accent-vec-rspecifier", &accent_vec_rspecifier, "Rspecifier "
+                "for accent embedding vectors per utterance.");
 
     po.Read(argc, argv);
 
@@ -119,6 +122,8 @@ int main(int argc, char *argv[]) {
         online_ivector_rspecifier);
     RandomAccessBaseFloatVectorReaderMapped ivector_reader(
         ivector_rspecifier, utt2spk_rspecifier);
+    RandomAccessBaseFloatVectorReader accent_vec_reader(
+        accent_vec_rspecifier);
 
     Int32VectorWriter words_writer(words_wspecifier);
     Int32VectorWriter alignment_writer(alignment_wspecifier);
@@ -170,6 +175,19 @@ int main(int argc, char *argv[]) {
             }
           }
 
+          const Vector<BaseFloat> *accent_vec = NULL;
+          if (!accent_vec_rspecifier.empty()) {
+            if (!accent_vec_reader.HasKey(utt)) {
+              KALDI_WARN << "No accent vector for utterance " << utt;
+              num_fail++;
+              continue;
+            } else {
+              // this address will be valid until we call HasKey() or Value()
+              // again.
+              accent_vec = &(accent_vec_reader.Value(utt));
+            }
+          }
+
           LatticeFasterDecoder *decoder =
               new LatticeFasterDecoder(*decode_fst, config);
 
@@ -177,7 +195,7 @@ int main(int argc, char *argv[]) {
               DecodableAmNnetSimpleParallel(
                   decodable_opts, trans_model, am_nnet,
                   features, ivector, online_ivectors,
-                  online_ivector_period);
+                  online_ivector_period, accent_vec);
 
           DecodeUtteranceLatticeFasterClass *task =
               new DecodeUtteranceLatticeFasterClass(
@@ -232,6 +250,19 @@ int main(int argc, char *argv[]) {
           }
         }
 
+        const Vector<BaseFloat> *accent_vec = NULL;
+        if (!accent_vec_rspecifier.empty()) {
+          if (!accent_vec_reader.HasKey(utt)) {
+            KALDI_WARN << "No accent vector for utterance " << utt;
+            num_fail++;
+            continue;
+          } else {
+            // this address will be valid until we call HasKey() or Value()
+            // again.
+            accent_vec = &(accent_vec_reader.Value(utt));
+          }
+        }
+
         // the following constructor takes ownership of the FST pointer so that
         // it is deleted when 'decoder' is deleted.
         LatticeFasterDecoder *decoder =
@@ -241,7 +272,7 @@ int main(int argc, char *argv[]) {
             DecodableAmNnetSimpleParallel(
                 decodable_opts, trans_model, am_nnet,
                 features, ivector, online_ivectors,
-                online_ivector_period);
+                online_ivector_period, accent_vec);
 
         DecodeUtteranceLatticeFasterClass *task =
             new DecodeUtteranceLatticeFasterClass(

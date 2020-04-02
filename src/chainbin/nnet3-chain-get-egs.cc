@@ -93,6 +93,7 @@ static bool ProcessFile(const TransitionModel *trans_mdl,
                         int32 ivector_period,
                         const chain::Supervision &supervision,
                         const VectorBase<BaseFloat> *deriv_weights,
+                        const VectorBase<BaseFloat> *accent_vec,
                         int32 supervision_length_tolerance,
                         const std::string &utt_id,
                         bool compress, bool long_key,
@@ -224,6 +225,20 @@ static bool ProcessFile(const TransitionModel *trans_mdl,
       nnet_chain_eg.inputs[1].Swap(&ivector_io);
     }
 
+    // TODO(danwells): this assumes we will alway have ivectors if
+    // we're trying to use accent embeddings. accent_vec might not
+    // always be the third input.
+    nnet_chain_eg.inputs.resize(accent_vec != NULL ? 3 : 2);
+
+    if (accent_vec != NULL) {
+      Matrix<BaseFloat> accent(1, accent_vec->Dim());
+      for (int32 i = 0; i < accent_vec->Dim(); i++) {
+        accent.Row(0)(i) = (*accent_vec)(i);
+      }
+      NnetIo accent_io("accent", 0, accent);
+      nnet_chain_eg.inputs[2].Swap(&accent_io);
+    }
+
     if (compress)
       nnet_chain_eg.Compress();
 
@@ -281,6 +296,7 @@ int main(int argc, char *argv[]) {
     int32 srand_seed = 0;
     std::string online_ivector_rspecifier,
         deriv_weights_rspecifier,
+        accent_vec_rspecifier,
         trans_mdl_rxfilename;
 
     ParseOptions po(usage);
@@ -308,6 +324,8 @@ int main(int argc, char *argv[]) {
                 "backpropagation. "
                 "Not specifying this is equivalent to specifying a vector of "
                 "all 1s.");
+    po.Register("accent-vec-rspecifier", &accent_vec_rspecifier, "Rspecifier "
+                "of accent embedding vectors per utterance.");
     po.Register("normalization-fst-scale", &normalization_fst_scale,
                 "Scale the weights from the "
                 "'normalization' FST before applying them to the examples. "
@@ -383,6 +401,8 @@ int main(int argc, char *argv[]) {
         online_ivector_rspecifier);
     RandomAccessBaseFloatVectorReader deriv_weights_reader(
         deriv_weights_rspecifier);
+    RandomAccessBaseFloatVectorReader accent_vec_reader(
+        accent_vec_rspecifier);
 
     int32 num_err = 0;
 
@@ -430,9 +450,23 @@ int main(int argc, char *argv[]) {
           }
         }
 
+        const Vector<BaseFloat> *accent_vec = NULL;
+        if (!accent_vec_rspecifier.empty()) {
+          if (!accent_vec_reader.HasKey(key)) {
+            KALDI_WARN << "No accent vector for utterance " << key;
+            num_err++;
+            continue;
+          } else {
+            // this address will be valid until we call HasKey() or Value()
+            // again.
+            accent_vec = &(accent_vec_reader.Value(key));
+          }
+        }
+
         if (!ProcessFile(trans_mdl_ptr, normalization_fst, feats,
                          online_ivector_feats, online_ivector_period,
-                         supervision, deriv_weights, supervision_length_tolerance,
+                         supervision, deriv_weights, accent_vec,
+                         supervision_length_tolerance,
                          key, compress, long_key,
                          &utt_splitter, &example_writer))
           num_err++;

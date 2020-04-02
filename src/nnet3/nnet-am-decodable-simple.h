@@ -185,7 +185,8 @@ class DecodableNnetSimple {
                       CachingOptimizingCompiler *compiler,
                       const VectorBase<BaseFloat> *ivector = NULL,
                       const MatrixBase<BaseFloat> *online_ivectors = NULL,
-                      int32 online_ivector_period = 1);
+                      int32 online_ivector_period = 1,
+                      const VectorBase<BaseFloat> *accent_vec = NULL);
 
 
   // returns the number of frames of likelihoods.  The same as feats_.NumRows()
@@ -225,6 +226,7 @@ class DecodableNnetSimple {
   void DoNnetComputation(int32 input_t_start,
                          const MatrixBase<BaseFloat> &input_feats,
                          const VectorBase<BaseFloat> &ivector,
+                         const VectorBase<BaseFloat> &accent_vec,
                          int32 output_t_start,
                          int32 num_subsampled_frames);
 
@@ -236,12 +238,16 @@ class DecodableNnetSimple {
   void GetCurrentIvector(int32 output_t_start,
                          int32 num_output_frames,
                          Vector<BaseFloat> *ivector);
+  // Gets the accent vector that will be used for this chunk of frames.
+  void GetCurrentAccentVec(Vector<BaseFloat> *accent_vec);
 
   // called from constructor
   void CheckAndFixConfigs();
 
   // returns dimension of the provided iVectors if supplied, or 0 otherwise.
   int32 GetIvectorDim() const;
+  // returns dimension of the provided accent vectors if supplied, or 0 otherwise.
+  int32 GetAccentVecDim() const;
 
   NnetSimpleComputationOptions opts_;
   const Nnet &nnet_;
@@ -264,6 +270,9 @@ class DecodableNnetSimple {
   // online_ivector_period_ helps us interpret online_ivector_feats_; it's the
   // number of frames the rows of ivector_feats are separated by.
   int32 online_ivector_period_;
+
+  // accent vector if provided
+  const VectorBase<BaseFloat> *accent_vec_;
 
   // a reference to a compiler passed in via the constructor, which may be
   // declared at the top level of the program so that we don't have to recompile
@@ -393,7 +402,8 @@ class DecodableAmNnetSimpleParallel: public DecodableInterface {
       const MatrixBase<BaseFloat> &feats,
       const VectorBase<BaseFloat> *ivector = NULL,
       const MatrixBase<BaseFloat> *online_ivectors = NULL,
-      int32 online_ivector_period = 1);
+      int32 online_ivector_period = 1,
+      const VectorBase<BaseFloat> *accent_vec = NULL);
 
 
   virtual BaseFloat LogLikelihood(int32 frame, int32 transition_id);
@@ -420,6 +430,7 @@ class DecodableAmNnetSimpleParallel: public DecodableInterface {
   Matrix<BaseFloat> *feats_copy_;
   Vector<BaseFloat> *ivector_copy_;
   Matrix<BaseFloat> *online_ivectors_copy_;
+  Vector<BaseFloat> *accent_vec_copy_;
 
   DecodableNnetSimple *decodable_nnet_;
 };
